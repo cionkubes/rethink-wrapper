@@ -9,7 +9,9 @@ import asyncio
 import rethinkdb as r
 import rx.concurrency
 from logzero import logger
+from .monkey_patch import patch_observable
 from rx import Observable
+patch_observable(Observable)
 
 r.set_loop_type('asyncio')
 
@@ -34,14 +36,16 @@ scheduler = rx.concurrency.AsyncIOScheduler(asyncio.get_event_loop())
 
 def set_keepalive(sock, after_idle_sec=60*5, interval_sec=3, max_fails=5):
     if sys.platform in ['win32', 'cygwin']:
-        sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 1000*after_idle_sec, 1000*interval_sec))
+        sock.ioctl(socket.SIO_KEEPALIVE_VALS,
+                   (1, 1000*after_idle_sec, 1000*interval_sec))
     elif sys.platform == 'darwin':
         TCP_KEEPALIVE = 0x10
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         sock.setsockopt(socket.IPPROTO_TCP, TCP_KEEPALIVE, interval_sec)
     elif sys.platform == 'linux':
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, after_idle_sec)
+        sock.setsockopt(socket.IPPROTO_TCP,
+                        socket.TCP_KEEPIDLE, after_idle_sec)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, interval_sec)
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, max_fails)
 
@@ -61,11 +65,13 @@ class Connection:
         while True:
             try:
                 self.conn = await r.connect(self.addr, self.port)
-                sock = self.conn._instance._streamwriter.get_extra_info('socket')
+                sock = self.conn._instance._streamwriter.get_extra_info(
+                    'socket')
                 set_keepalive(sock)
                 break
             except r.ReqlDriverError:
-                logger.critical(f"Failed to connect to database, retrying in {self.retry_timeout} seconds.")
+                logger.critical(
+                    f"Failed to connect to database, retrying in {self.retry_timeout} seconds.")
                 await asyncio.sleep(self.retry_timeout)
 
     def observe(self, table) -> Observable:
@@ -95,7 +101,7 @@ class Connection:
 
             while True:
                 yield await feed.next()
-                
+
         yield iterable()
         feed.close()
 
