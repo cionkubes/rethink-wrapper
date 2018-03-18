@@ -93,11 +93,17 @@ class Connection:
             yield await feed.next()
 
     @contextmanager
-    def changes(self, table):
+    def changes(self, table=None, query=None):
+        if not table and not query:
+            raise ValueError("Must supply either table name or rdb query")
+
+        if table:
+            query = r.db(self.db_name).table(table)
+
         feed = None
 
         async def iterable():
-            feed = await r.db(self.db_name).table(table).changes().run(self.conn)
+            feed = await query.changes().run(self.conn)
 
             while True:
                 yield await feed.next()
@@ -112,7 +118,7 @@ class Connection:
             logger.debug(f"Subscribed to {table} change feed.")
 
             async def push_changes():
-                with self.changes(table) as changes:
+                with self.changes(table=table) as changes:
                     async for change in changes:
                         obs.on_next(change)
 
