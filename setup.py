@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 setup(
     name="async_rethink",
-    version="0.2.2",
+    version="0.2.3",
     license="GPLv3",
     install_requires=[
         'Rx==1.6.0',

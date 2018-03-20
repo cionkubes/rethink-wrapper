@@ -1,16 +1,19 @@
+import rx.concurrency
+import rethinkdb as r
+import functools
+import asyncio
 import socket
 import sys
-import functools
+
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Callable
-
-import asyncio
-import rethinkdb as r
-import rx.concurrency
 from logzero import logger
-from .monkey_patch import patch_observable
+from typing import Callable
+from uuid import uuid4
 from rx import Observable
+
+from .log import RethinkEventsLogger, EventsFormatter
+from .monkey_patch import patch_observable
 patch_observable(Observable)
 
 r.set_loop_type('asyncio')
@@ -86,6 +89,16 @@ class Connection:
     def run(self, query):
         return query.run(self.conn)
 
+    def get_log_handler(self, emitter):
+        @desyncify
+        async def insert(event):
+            await self.run(self.db().table('tasks').insert(event))
+
+        handler = RethinkEventsLogger(insert)
+        handler.setFormatter(EventsFormatter(emitter))
+
+        return handler
+
     async def run_iter(self, query):
         feed = await query.run(self.conn)
 
@@ -149,3 +162,28 @@ class keydefaultdict(defaultdict):
         else:
             ret = self[key] = self.default_factory(key)
             return ret
+
+
+def desyncify(fn, loop=asyncio.get_event_loop()):
+    tasks = {}
+    stopped = False
+
+    async def wait_then_remove(awaitable, uuid):
+        await awaitable
+        del tasks[uuid]
+
+    def wrapper(*args, **kwargs):
+        if stopped:
+            raise Exception(f"desyncify {fn} has been stopped.")
+
+        uuid = uuid4()
+        tasks[uuid] = loop.create_task(
+            wait_then_remove(fn(*args, **kwargs), uuid))
+
+    def shutdown():
+        nonlocal stopped
+        stopped = True
+        return asyncio.gather(tasks.values())
+
+    wrapper.shutdown = shutdown
+    return wrapper
