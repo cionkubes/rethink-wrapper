@@ -1,20 +1,17 @@
-import rx.concurrency
 import rethinkdb as r
 import functools
 import asyncio
 import socket
 import sys
 
+from aioreactive.operators import from_async_iterator
+from aioreactive import AsyncObservable
 from collections import defaultdict
-from contextlib import contextmanager
 from logzero import logger
 from typing import Callable
 from uuid import uuid4
-from rx import Observable
 
 from .log import RethinkEventsLogger, EventsFormatter
-from .monkey_patch import patch_observable
-patch_observable(Observable)
 
 r.set_loop_type('asyncio')
 
@@ -32,9 +29,6 @@ def require_connection(fn):
         return fn(self, *args, **kwargs)
 
     return wrapper
-
-
-scheduler = rx.concurrency.AsyncIOScheduler(asyncio.get_event_loop())
 
 
 def set_keepalive(sock, after_idle_sec=60*5, interval_sec=3, max_fails=5):
@@ -77,7 +71,7 @@ class Connection:
                     f"Failed to connect to database, retrying in {self.retry_timeout} seconds.")
                 await asyncio.sleep(self.retry_timeout)
 
-    def observe(self, table) -> Observable:
+    def observe(self, table) -> AsyncObservable:
         return self.observables[table]
 
     def close(self):
@@ -99,60 +93,20 @@ class Connection:
 
         return handler
 
-    async def run_iter(self, query):
+    async def iter(self, query):
         feed = await query.run(self.conn)
 
         while await feed.fetch_next():
             yield await feed.next()
 
-    @contextmanager
-    def changes(self, table=None, query=None):
-        if not table and not query:
-            raise ValueError("Must supply either table name or rdb query")
-
-        if table:
-            query = r.db(self.db_name).table(table)
-
-        feed = None
-
-        async def iterable():
-            feed = await query.changes().run(self.conn)
-
-            while True:
-                yield await feed.next()
-
-        yield iterable()
-        feed.close()
+    def observable_query(self, query):
+        return from_async_iterator(self.iter(query))
 
     def changefeed_observable(self, table):
         logger.debug(f"Creating observable for {table}")
+        query = self.db().table(table).changes()
 
-        def subscribe(obs):
-            logger.debug(f"Subscribed to {table} change feed.")
-
-            async def push_changes():
-                with self.changes(table=table) as changes:
-                    async for change in changes:
-                        obs.on_next(change)
-
-            task = asyncio.ensure_future(push_changes())
-
-            def done(fut):
-                e = fut.exception()
-                if e is not None:
-                    obs.on_error(e)
-
-                obs.on_completed()
-
-            task.add_done_callback(done)
-
-            def dispose():
-                logger.debug(f"Disposed of {table} change feed subscription.")
-                task.cancel()
-
-            return dispose
-
-        return Observable.create(subscribe).subscribe_on(scheduler).share()
+        return self.observable_query(query).share()
 
 
 class keydefaultdict(defaultdict):

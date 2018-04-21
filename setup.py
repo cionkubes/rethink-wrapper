@@ -4,7 +4,7 @@ setup(
     version="0.2.3",
     license="GPLv3",
     install_requires=[
-        'Rx==1.6.0',
+        'aioreactive==0.5.0',
         'rethinkdb>=1.14',
         'logzero==1.3.1'
     ],
