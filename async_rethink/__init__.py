@@ -4,13 +4,14 @@ import asyncio
 import socket
 import sys
 
-from aioreactive.operators import from_async_iterator
-from aioreactive import AsyncObservable
+from aioreactive.operators import from_async_iterable
+from aioreactive.core import AsyncObservable, Operators
 from collections import defaultdict
 from logzero import logger
 from typing import Callable
 from uuid import uuid4
 
+from .reactive import share
 from .log import RethinkEventsLogger, EventsFormatter
 
 r.set_loop_type('asyncio')
@@ -62,14 +63,14 @@ class Connection:
         while True:
             try:
                 self.conn = await r.connect(self.addr, self.port)
-                sock = self.conn._instance._streamwriter.get_extra_info(
-                    'socket')
-                set_keepalive(sock)
-                break
             except r.ReqlDriverError:
                 logger.critical(
                     f"Failed to connect to database, retrying in {self.retry_timeout} seconds.")
                 await asyncio.sleep(self.retry_timeout)
+            else:
+                sock = self.conn._instance._streamwriter.get_extra_info('socket')
+                set_keepalive(sock)
+                break
 
     def observe(self, table) -> AsyncObservable:
         return self.observables[table]
@@ -80,8 +81,8 @@ class Connection:
     def db(self):
         return r.db(self.db_name)
 
-    def run(self, query):
-        return query.run(self.conn)
+    async def run(self, query):
+        return await query.run(self.conn)
 
     def get_log_handler(self, emitter):
         @desyncify
@@ -94,20 +95,33 @@ class Connection:
         return handler
 
     async def iter(self, query):
-        feed = await query.run(self.conn)
+        feed = await self.run(query)
 
         while await feed.fetch_next():
             yield await feed.next()
 
+    async def list(self, query):
+        result = []
+
+        async for item in self.iter(query):
+            result.append(item)
+
+        return result
+
     def observable_query(self, query):
-        return from_async_iterator(self.iter(query))
+        return from_async_iterable(self.iter(query))
 
     def changefeed_observable(self, table):
         logger.debug(f"Creating observable for {table}")
+        def logthrough(name):
+            def log(x):
+                logger.debug(f"{name}: {x}")
+                return x
+
+            return Operators.map(log)
+
         query = self.db().table(table).changes()
-
-        return self.observable_query(query).share()
-
+        return self.observable_query(query) | share
 
 class keydefaultdict(defaultdict):
     def __missing__(self, key):
