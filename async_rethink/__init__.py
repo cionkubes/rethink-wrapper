@@ -4,9 +4,10 @@ import asyncio
 import socket
 import sys
 
-from aioreactive.operators import from_async_iterable
+from aioreactive.operators import from_async_iterable, merge, from_iterable
 from aioreactive.core import AsyncObservable, Operators
 from collections import defaultdict
+from operator import itemgetter
 from logzero import logger
 from typing import Callable
 from uuid import uuid4
@@ -110,6 +111,34 @@ class Connection:
 
     def observable_query(self, query):
         return from_async_iterable(self.iter(query))
+
+    def start_with_and_changes(self, query, unpack=('new_val', 'old_val')):
+        return merge(from_iterable([
+            self.observable_query(query)\
+                | Operators.map(lambda item: {unpack[0]: item, unpack[1]: None}),
+            self.observable_query(query.changes())])
+        )
+
+    def changes_accumulate(self, query, pk='id', unpack=('new_val', 'old_val')):
+        unpacker = itemgetter(*unpack)
+        accumulator = {}
+
+        def update(change):
+            new, old = unpacker(change)
+
+            if new is None:
+                accumulator.pop(old[pk], None)
+            elif old is None:
+                accumulator[new[pk]] = new
+            elif old[pk] != new[pk]:
+                accumulator.pop(old[pk], None)
+                accumulator[new[pk]] = new
+            else:
+                accumulator[new[pk]] = new
+
+            return accumulator.values()
+
+        return self.start_with_and_changes(query, unpack=unpack) | Operators.map(update)
 
     def changefeed_observable(self, table):
         logger.debug(f"Creating observable for {table}")

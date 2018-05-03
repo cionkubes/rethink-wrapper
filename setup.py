@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 setup(
     name="async_rethink",
-    version="0.2.4",
+    version="1.0.0-rc",
     license="GPLv3",
     install_requires=[
         'aioreactive==0.5.0',
