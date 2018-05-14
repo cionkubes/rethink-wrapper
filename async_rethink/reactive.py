@@ -57,31 +57,27 @@ class AsyncRepeatedlyCallWithLatest(AsyncObserver):
         self.future = None
 
     async def call_with(self, value):
-        try:
-            while True:
-                await self.fn(value)
-        except asyncio.CancelledError:
-            pass
+        while True:
+            await self.fn(value)
 
     async def asend(self, value):
         if self.future is not None:
             self.future.cancel()
-            await self.future
 
         self.future = asyncio.ensure_future(self.call_with(value))
 
     async def athrow(self, ex):
-        if self.future is not None:
-            self.future.set_exception(ex)
+        import traceback
+        logger.error(f"Exception in AsyncRepeatedlyCallWithLatest: {ex}")
+        logger.error(traceback.format_exc())
 
-        await self.future
+        if self.future is not None and not self.future.cancelled():
+            self.future.set_exception(ex)
 
     async def aclose(self):
         if self.future is not None:
             self.future.cancel()
-
-        await self.future
-
+            self.future = None
 
 class AsyncInheritObserver(AsyncObserver):
     def __init__(self, observer, send):
